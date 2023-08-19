@@ -1,5 +1,6 @@
 """REST client handling, including aircallStream base class."""
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable, Callable, Generator
 from urllib.parse import urlparse, parse_qs
@@ -78,7 +79,15 @@ class aircallStream(RESTStream):
         if self.replication_key:
             params["order"] = "asc"
 
-        params.update(context)  # If there's a partitions property, update it with the context
+        starting_time = self.get_starting_timestamp(context)
+        starting_unix_time = starting_time.timestamp()
+
+        if starting_unix_time:
+            params["from"] = starting_unix_time
+        else:
+            params["from"] = time.time()  # Unix timestamp
+
+        params.update(context)  # If there are partitions, update it with the context
         return params
 
     def parse_response(self, response: requests.Response) -> Iterable[dict]:
