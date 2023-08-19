@@ -1,21 +1,19 @@
 """REST client handling, including aircallStream base class."""
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Iterable, Callable, Generator
 from urllib.parse import urlparse, parse_qs
 
 import requests
-import time
 import backoff
 
 from datetime import datetime
 from singer_sdk.authenticators import BasicAuthenticator
 from singer_sdk.helpers.jsonpath import extract_jsonpath
 from singer_sdk.streams import RESTStream
-from singer_sdk.exceptions import RetriableAPIError
 
 SCHEMAS_DIR = Path(__file__).parent / Path("./schemas")
-
 
 class aircallStream(RESTStream):
     """aircall stream class."""
@@ -51,9 +49,10 @@ class aircallStream(RESTStream):
         # TODO: If pagination is required, return a token which can be used to get the
         #       next page. If this is the final page, return "None" to end the
         #       pagination loop.
+        json_response = response.json()
         if self.next_page_token_jsonpath:
             all_matches = extract_jsonpath(
-                self.next_page_token_jsonpath, response.json()
+                self.next_page_token_jsonpath, json_response
             )
             first_match = next(iter(all_matches), None)
             next_page_token = first_match
@@ -66,44 +65,30 @@ class aircallStream(RESTStream):
             self, context: Optional[dict], next_page_token: Optional[Any]
     ) -> Dict[str, Any]:
         """Return a dictionary of values to be used in URL parameterization."""
-        params: dict = {}
+        if not context:
+            context = {}
+
+        params: dict = {"per_page": 50}
         if next_page_token:
             # format next_page_token: "https://api.aircall.io/v1/calls?page=2&per_page=20"
             # page & per_page require int params
             # extract query from next_page_token string
             next_page_token_query: Dict = parse_qs(urlparse(next_page_token).query)
-            params["page"] = int(next_page_token_query.get('page', ['1'])[0])  # Default si 1
-            params["per_page"] = int(next_page_token_query.get('per_page', ['20'])[0])  # Default is 20
+            params["page"] = int(next_page_token_query.get('page', ['1'])[0])  # Default is 1
+            params["per_page"] = int(next_page_token_query.get('per_page', ['50'])[0])  # Default is is 20, but use 50
         if self.replication_key:
             params["order"] = "asc"
-            # params["order_by"] = self.replication_key
-        
-        #FUJ-4262, Aircall tap for Wine Enthusiast is not fetching data beyond 3/20
-        
-        #starting_time = self.get_starting_timestamp(context) if type(context) is datetime else None
-        
-        # Aircall API expects Epoch or Unix Timestamp vs ISO datetime
-        # get replication key from bookmark
-        
+
         starting_time = self.get_starting_timestamp(context)
         starting_unix_time = starting_time.timestamp()
-        
+
         if starting_unix_time:
             params["from"] = starting_unix_time
         else:
-            #Unix Timestamp
-            params["from"] = time.time()
+            params["from"] = time.time()  # Unix timestamp
 
+        params.update(context)  # If there are partitions, update it with the context
         return params
-    
-    def prepare_request_payload(
-            self, context: Optional[dict], next_page_token: Optional[Any]
-    ) -> Optional[dict]:
-        """Prepare the data payload for the REST API request.
-        By default, no payload will be sent (return None).
-        """
-        # TODO: Delete this method if no payload is required. (Most REST APIs.)
-        return None
 
     def parse_response(self, response: requests.Response) -> Iterable[dict]:
         """Parse the response and return an iterator of result rows."""
@@ -121,7 +106,7 @@ class aircallStream(RESTStream):
             if key in row and row.get(key):
                 row[key] = datetime.fromtimestamp(row.get(key))
         return row
-    
+
     """
     # This code-block is not required when backoff_wait_generator code-block is active
     def validate_response(self, response: requests.Response) -> None:
@@ -135,13 +120,11 @@ class aircallStream(RESTStream):
             else:
                 raise e
     """
-    
+
     #https://sdk.meltano.com/en/latest/code_samples.html#custom-backoff
     #FUJ-4120, introducing custom backoff for Aircall taps
-    
+
     #https://developer.aircall.io/tutorials/logging-calls/#:~:text=Aircall%20Public%20API%20is%20rate,will%20be%20blocked%20by%20Aircall.
     #Aircall allows 60 requests per minute, generating a wait time of 90 seconds to avoid error caused by RateLimit exception
     def backoff_wait_generator(max_time: int) -> Callable[..., Generator[int, Any, None]]:
         return backoff.constant(interval=90)
-    
-    
