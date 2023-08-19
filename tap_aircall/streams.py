@@ -5,7 +5,7 @@ from typing import Optional, List, Dict
 from tap_aircall.client import aircallStream
 from .schemas import user_properties, call_properties
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil.parser import parse as parse_datetime
 
 
@@ -13,9 +13,9 @@ def get_stream_partitions_range(config: dict) -> List[Dict[str, float]]:
     if "start_date" not in config:
         return []
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     try:
-        start_date_as_dt = parse_datetime(config["start_date"])
+        start_date_as_dt = parse_datetime(config["start_date"]).astimezone(timezone.utc)
     except Exception:
         start_date_as_dt = now - timedelta(days=30)  # Default to the last 30 days
 
